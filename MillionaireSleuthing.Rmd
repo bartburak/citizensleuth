@@ -1,0 +1,112 @@
+---
+title: "Data sleuthing with #citizensleuth"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This page contains R code used to compile a plot of the total disclosures declared by the White House staff in their form 278e.  
+The data came from the Center for Public Integrity: 
+https://www.publicintegrity.org/citizensleuth 
+
+
+The goal of this exercise was to estimate the wealth of civil servants in the current administration.
+This work is by no means definitive or official.  Please comment on mistakes in the code if you find any.  
+
+
+# Load some packages
+For this code to work I need to load the following R packages:  
+-readxl   
+-ggrepel  
+-dplyr  
+-scales  
+-stringr  
+
+```{r load_packages, echo=TRUE, include=FALSE}
+list.of.packages <- c("readxl", "ggrepel","dplyr","scales","stringr")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+library(readxl); library(ggrepel);library(dplyr);library(scales); library(stringr)
+```
+
+# Read in the data:
+This is a google doc that can be downloaded from:
+https://docs.google.com/spreadsheets/d/1R5AOpTBa6kro2qbSRa7kUD-Gg2FKD7v6vc2EJS7Dooo/edit#gid=1990489212
+```{r read_data}
+sheet4 <- read_excel("data/TRUMP ADMINISTRATION PERSONAL FINANCES_ SEARCHABLE SPREADSHEETS.xlsx", sheet=4)
+```
+
+
+# Clean up the data
+``` {r clean, echo=TRUE}
+d <- sheet4
+d$amt <- d$`AMOUNT OF INCOME`
+# replace the "none or less than $200" occurences by $100, and NAs by
+d$amt[grep("None",d$amt)] = 100
+d$amt[is.na(d$amt)] = 0
+d$amt[d$amt=='$'] = 0 
+
+
+# Remove commas, spaces, dollar signs, parentheses
+d$amt <- gsub(",","",d$amt)
+d$amt <- gsub(" ","",d$amt)
+d$amt <- gsub("\\$","",d$amt)
+d$amt <- gsub(")","",d$amt)
+
+# Remove the word "Over"
+# Note: this means that those who answered "Over 5,000,000" are only assigned "5,000,000"
+d$amt <- gsub("Over","",d$amt)
+
+# Some people gave two answers on the same line - this code splits them into two cells: 
+d$amt1 <- gsub(";.*$","",d$amt)
+d$amt2 <- 0
+d$amt2[grep(";",d$amt)]<- gsub("^.*;","",d$amt[grep(";",d$amt)])
+
+
+# Many people answered with a range (ex: 201-1000) - this code replace all ranges with the midpoint (ex: '201-1000' becomes '600.5'):
+d$rg_low <- as.numeric(gsub("-.*$","",d$amt1))
+d$rg_high <- as.numeric(gsub("^.*-","",d$amt1))
+d$mid <- (d$rg_low + d$rg_high)/2
+
+# Calculate the total per line (for those who gave two answers on the same line): 
+d$totamt_perline = round(as.numeric(d$mid)+as.numeric(d$amt2),digits=0)
+
+# Calculate the total per person: 
+totInc<- aggregate(d$totamt_perline, list(name = d$NAME),FUN=sum, na.rm=TRUE)
+names(totInc)[names(totInc) == 'x'] <- 'TotalIncome'
+totInc<- mutate(totInc, Millions = TotalIncome/1000000)
+
+# Replace first names with just the initial (for legibility on the graph): 
+totInc$nameInitial <- str_extract(totInc$name,"^.*, .") 
+
+# Rank the staff from richest to least-rich: 
+totInc$rank <-round(rank(-totInc$TotalIncome, na.last = TRUE),digits=0)
+```
+
+# Make the plot: 
+```{r plot}
+# Select all the multi-millionaires (excluding Trump himself)
+topWH <- filter(totInc, Millions >= 2 & rank >1)
+
+# Make a caption: 
+caption <- "Notes: Reported ranges were approximated at midpoint (ex: '200-1000' was approximated by '600'). Donald J. Trump declared approximately 590 million. † indicates someone who no longer worked with the administration at the time the data was published"
+caption <- paste0(strwrap(caption, 100), sep="", collapse="\n")
+
+# Generate the plot: Millions disclosed against rank
+g <- ggplot(topWH, aes(x=rank, y=Millions, size=Millions, label=nameInitial))
+g <- g+geom_point() + ylab("Total Disclosure in Millions (approx)") + xlab("Ranking")
+g <- g + geom_label_repel(size=2)
+g <- g + theme(panel.background  = element_rect(fill = 'lightblue'),
+               plot.background  = element_rect(fill = 'lightyellow2'),
+               plot.caption=element_text(hjust = -0.1))
+g <- g + labs(title = "The Multimillionaires in Trump's White House", 
+              subtitle = "(those who declared >2M on Form 278e: Public Financial Disclosure)", 
+              caption = caption)
+g <- g + theme(plot.caption=element_text(size=8, hjust=0, margin=margin(t=5)))
+```
+
+# Final plot: 
+```{r fig4, out.width = '100%'}
+g
+```
